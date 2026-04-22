@@ -1,5 +1,4 @@
 # Multi-Container Runtime (OS-Jackfruit)
-**PES University - Department of Computer Science & Engineering**
 
 A lightweight Linux container runtime developed in C, featuring a long-running supervisor daemon, bounded-buffer logging with thread synchronization, and a custom Linux Kernel Module (LKM) for memory enforcement.
 
