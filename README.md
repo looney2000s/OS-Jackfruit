@@ -1,111 +1,96 @@
-# Multi-Container Runtime
+# Multi-Container Runtime (OS-Jackfruit)
+**PES University - Department of Computer Science & Engineering**
 
-A lightweight Linux container runtime in C with a long-running supervisor and a kernel-space memory monitor.
-
-Read [`project-guide.md`](project-guide.md) for the full project specification.
-
----
-
-## Getting Started
-
-### 1. Fork the Repository
-
-1. Go to [github.com/shivangjhalani/OS-Jackfruit](https://github.com/shivangjhalani/OS-Jackfruit)
-2. Click **Fork** (top-right)
-3. Clone your fork:
-
-```bash
-git clone https://github.com/<your-username>/OS-Jackfruit.git
-cd OS-Jackfruit
-```
-
-### 2. Set Up Your VM
-
-You need an **Ubuntu 22.04 or 24.04** VM with **Secure Boot OFF**. WSL will not work.
-
-Install dependencies:
-
-```bash
-sudo apt update
-sudo apt install -y build-essential linux-headers-$(uname -r)
-```
-
-### 3. Run the Environment Check
-
-```bash
-cd boilerplate
-chmod +x environment-check.sh
-sudo ./environment-check.sh
-```
-
-Fix any issues reported before moving on.
-
-### 4. Prepare the Root Filesystem
-
-```bash
-mkdir rootfs-base
-wget https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz
-tar -xzf alpine-minirootfs-3.20.3-x86_64.tar.gz -C rootfs-base
-
-# Make one writable copy per container you plan to run
-cp -a ./rootfs-base ./rootfs-alpha
-cp -a ./rootfs-base ./rootfs-beta
-```
-
-Do not commit `rootfs-base/` or `rootfs-*` directories to your repository.
-
-### 5. Understand the Boilerplate
-
-The `boilerplate/` folder contains starter files:
-
-| File                   | Purpose                                             |
-| ---------------------- | --------------------------------------------------- |
-| `engine.c`             | User-space runtime and supervisor skeleton          |
-| `monitor.c`            | Kernel module skeleton                              |
-| `monitor_ioctl.h`      | Shared ioctl command definitions                    |
-| `Makefile`             | Build targets for both user-space and kernel module |
-| `cpu_hog.c`            | CPU-bound test workload                             |
-| `io_pulse.c`           | I/O-bound test workload                             |
-| `memory_hog.c`         | Memory-consuming test workload                      |
-| `environment-check.sh` | VM environment preflight check                      |
-
-Use these as your starting point. You are free to restructure the repository however you want — the submission requirements are listed in the project guide.
-
-### 6. Build and Verify
-
-```bash
-cd boilerplate
-make
-```
-
-If this compiles without errors, your environment is ready.
-
-### 7. GitHub Actions Smoke Check
-
-Your fork will inherit a minimal GitHub Actions workflow from this repository.
-
-That workflow only performs CI-safe checks:
-
-- `make -C boilerplate ci`
-- user-space binary compilation (`engine`, `memory_hog`, `cpu_hog`, `io_pulse`)
-- `./boilerplate/engine` with no arguments must print usage and exit with a non-zero status
-
-The CI-safe build command is:
-
-```bash
-make -C boilerplate ci
-```
-
-This smoke check does not test kernel-module loading, supervisor runtime behavior, or container execution.
+A lightweight Linux container runtime developed in C, featuring a long-running supervisor daemon, bounded-buffer logging with thread synchronization, and a custom Linux Kernel Module (LKM) for memory enforcement.
 
 ---
 
-## What to Do Next
+## 1. Team Information
+* **Student1 Name:** Abdullah Faruqui
+* **SRN1:** PES1UG24AM333
+* **Student2 Name:** Aarya Prasad G
+* **SRN2:** PES1UG24AM331
+* **Project Name:** OS-Jackfruit (Multi-Container Runtime)
 
-Read [`project-guide.md`](project-guide.md) end to end. It contains:
+---
 
-- The six implementation tasks (multi-container runtime, CLI, logging, kernel monitor, scheduling experiments, cleanup)
-- The engineering analysis you must write
-- The exact submission requirements, including what your `README.md` must contain (screenshots, analysis, design decisions)
+## 2. Build and Execution Guide
 
-Your fork's `README.md` should be replaced with your own project documentation as described in the submission package section of the project guide. (As in get rid of all the above content and replace with your README.md)
+### Prerequisites
+* OS: Ubuntu 24.04 (LTS)
+* Kernel: 6.17.0-20-generic (or compatible headers)
+* Tools: gcc, make, kbuild
+
+### Build Instructions
+Clean previous builds and compile both user-space and kernel-space components:
+    make clean && make
+
+### Execution Steps
+1. Insert the Kernel Module:
+    sudo insmod monitor.ko
+
+2. Start the Supervisor Daemon (Bind to Core 0 for experiment accuracy):
+    sudo taskset -c 0 ./engine supervisor ../rootfs-base
+
+3. Launch a Container (New Terminal):
+    sudo ./engine start alpha ../rootfs-alpha /bin/sh
+
+4. Cleanup:
+    sudo rmmod monitor
+
+---
+
+## 3. Demo with Screenshots
+
+| # | Feature Demo | Screenshot |
+|---|---|---|
+| 1 | Multi-container supervision | ![Multi-container](screenshots/ss1.png) |
+| 2 | Metadata tracking | ![ps command](screenshots/ss2.png) |
+| 3 | Bounded-buffer logging | ![logs output](screenshots/ss3.png) |
+| 4 | CLI and IPC | ![CLI interaction](screenshots/ss4.png) |
+| 5 | Soft-limit warning | ![dmesg soft warning](screenshots/ss5.png) |
+| 6 | Hard-limit enforcement | ![Hard limit kill](screenshots/ss6.png) |
+| 7 | Scheduling experiment | ![Top output](screenshots/ss7.png) |
+| 8 | Clean teardown | ![Cleanup verification](screenshots/ss8.png) |
+
+---
+
+## 4. Engineering Analysis
+
+### 1. Isolation Mechanisms
+The runtime utilizes Linux Namespaces via the clone() system call. We isolate the Process ID tree (CLONE_NEWPID), Mount points (CLONE_NEWNS), and Hostname (CLONE_NEWUTS). This creates an environment where the container process believes it is the root of the system (PID 1) while remaining a standard process on the host. We use chroot() to pivot the root filesystem to the Alpine Linux base, ensuring the container cannot access host files.
+
+### 2. Supervisor Lifecycle
+The supervisor process serves as the "Control Plane." It is responsible for:
+* Orphan Management: By catching SIGCHLD, the supervisor ensures exited containers are reaped and do not become zombie processes.
+* Metadata Persistence: It tracks the host PID, state (running/killed), and memory limits for every container in a thread-safe linked list.
+
+### 3. IPC and Synchronization
+We implemented a Producer-Consumer model for logging:
+* Pipes: Connect container stdout to a supervisor-side producer thread.
+* Bounded Buffer: Producer threads push logs into a fixed-size buffer. We use pthread_mutex_t to ensure thread safety and pthread_cond_t (condition variables) to signal when the buffer has data or space. This prevents "busy-waiting" and maximizes CPU efficiency.
+
+### 4. Memory Management (Kernel Space)
+Real-time memory enforcement is handled by the monitor.ko LKM.
+* Why Kernel Space? User-space polling is too slow and can be preempted. The kernel monitor uses a timer interrupt to check RSS (Resident Set Size) every second.
+* Locking: We utilize a spinlock_t because the monitor runs in an interrupt context where sleeping (required by mutexes) is prohibited.
+
+### 5. Scheduling Behavior
+Our top experiment demonstrated the Completely Fair Scheduler (CFS) in action. By setting a nice value of 0 for one container and 15 for another, and pinning them to a single CPU core, we forced them to compete for time slices. The Linux kernel calculated a much larger vruntime for the "nice" container, resulting in a 95%/5% CPU split in favor of the higher-priority process.
+
+---
+
+## 5. Design Decisions
+
+* UNIX Domain Sockets: Chosen for Path B (Control IPC) because they are more robust than FIFOs, allowing for structured data exchange and bi-directional communication between the CLI and Supervisor.
+* Static Binaries: The burner and memory_hog utilities were compiled with the -static flag. This ensures they can run inside the minimal Alpine rootfs without requiring host-level shared libraries.
+* Graceful Shutdown: We implemented a SIGINT handler in the supervisor to iterate through the metadata list and SIGKILL all child containers before the supervisor itself exits, preventing orphaned "rogue" processes.
+
+---
+
+## 6. Project Results Summary
+Our implementation successfully met all requirements of the OS-Jackfruit specification. We verified that:
+1. Containers are isolated and cannot see host processes.
+2. Logs are correctly piped and buffered without data loss.
+3. Memory limits are strictly enforced by the kernel.
+4. The scheduler respects priority values under contention.
